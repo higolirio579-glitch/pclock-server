@@ -192,6 +192,11 @@ body{
 .offbtn.arm{background:#e8657a;color:#2a0a10;border-color:#e8657a;font-weight:700}
 .toast{min-height:22px;text-align:center;margin:16px 0 0;font-size:14px;color:var(--text)}
 
+.biobtn{display:block;width:100%;margin:0 0 12px;padding:16px;font-size:16px;font-weight:700;font-family:inherit;
+  background:var(--text);color:#1b1f2a;border:0;border-radius:14px;cursor:pointer}
+.biobtn:active{filter:brightness(.92)}
+.bioset{display:block;margin:18px auto 0;background:none;border:0;color:var(--muted);font-family:inherit;
+  font-size:13px;text-decoration:underline;cursor:pointer;padding:8px}
 .foot{margin-top:28px;text-align:center;font-size:12px;color:#5c6478;line-height:1.5}
 .exit{display:block;margin:14px auto 0;background:none;border:0;color:var(--muted);font-family:inherit;
   font-size:13px;text-decoration:underline;cursor:pointer;padding:8px}
@@ -216,6 +221,7 @@ button:focus-visible,#pin:focus-visible{outline:2px solid #fff;outline-offset:2p
   </section>
 
   <div class="gate">
+    <button class="biobtn" id="biobtn" type="button" hidden>Entrar com Face ID / digital</button>
     <label for="pin">PIN</label>
     <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="••••••">
   </div>
@@ -235,6 +241,7 @@ button:focus-visible,#pin:focus-visible{outline:2px solid #fff;outline-offset:2p
   </section>
 
   <p class="foot">O PC consulta o servidor sozinho.<br>Sem internet, ele continua trancado.</p>
+  <button class="bioset" id="bioset" type="button" hidden></button>
   <button class="exit" id="exit" type="button">Sair deste PIN</button>
 </div>
 <script>
@@ -254,16 +261,56 @@ var last=null, cur=null, tid=null, toastT=null, armT=null, armed=false;
 function store(k,v){try{if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);}catch(e){}}
 function load(k){try{return localStorage.getItem(k);}catch(e){return null;}}
 
-pin.value=load('pclock_pin')||'';
+// Face ID / digital: o PIN fica guardado só neste celular e só é usado depois que o celular confirma você.
+var elBio=document.getElementById('biobtn'), elBioSet=document.getElementById('bioset');
+var bioOk=!!(window.PublicKeyCredential&&navigator.credentials&&window.isSecureContext);
+function b64e(buf){var s='',a=new Uint8Array(buf);for(var i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);
+  return btoa(s).split('+').join('-').split('/').join('_').split('=').join('');}
+function b64d(t){t=t.split('-').join('+').split('_').join('/');while(t.length%4)t+='=';var s=atob(t),a=new Uint8Array(s.length);for(var i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a.buffer;}
+function bioOn(){return bioOk&&!!load('pclock_bio')&&!!load('pclock_pinbio');}
+function rnd(n){var a=new Uint8Array(n);crypto.getRandomValues(a);return a;}
+function bioUi(){
+  elBio.hidden=!(bioOn()&&!pin.value);
+  if(!bioOk){elBioSet.hidden=true;return;}
+  if(bioOn()){elBioSet.hidden=false;elBioSet.textContent='Desativar Face ID / digital';}
+  else if(last&&pin.value){elBioSet.hidden=false;elBioSet.textContent='Ativar Face ID / digital neste celular';}
+  else elBioSet.hidden=true;
+}
+elBio.addEventListener('click',async function(){
+  try{
+    await navigator.credentials.get({publicKey:{challenge:rnd(32),rpId:location.hostname,userVerification:'required',timeout:60000,
+      allowCredentials:[{type:'public-key',id:b64d(load('pclock_bio'))}]}});
+    pin.value=load('pclock_pinbio')||'';
+    bioUi();refresh();
+  }catch(e){toast('Não deu para confirmar. Tente de novo ou digite o PIN.');}
+});
+elBioSet.addEventListener('click',async function(){
+  if(bioOn()){   // desativar: volta a guardar o PIN do jeito normal
+    store('pclock_pin',load('pclock_pinbio'));store('pclock_bio',null);store('pclock_pinbio',null);
+    bioUi();toast('Face ID desativado.');return;
+  }
+  try{
+    var c=await navigator.credentials.create({publicKey:{challenge:rnd(32),rp:{name:'PCLock',id:location.hostname},
+      user:{id:rnd(16),name:'pclock',displayName:'PCLock'},
+      pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
+      authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required',residentKey:'discouraged'},
+      timeout:60000,attestation:'none'}});
+    store('pclock_bio',b64e(c.rawId));store('pclock_pinbio',pin.value);store('pclock_pin',null);
+    bioUi();toast('Pronto! Da próxima vez entre com Face ID / digital.');
+  }catch(e){toast('Não foi possível ativar neste celular.');}
+});
+
+pin.value=bioOn()?'':(load('pclock_pin')||'');
 cur=load('pclock_dev');
 pin.addEventListener('input',function(){
-  store('pclock_pin',pin.value);
+  store(bioOn()?'pclock_pinbio':'pclock_pin',pin.value);
+  bioUi();
   elToast.textContent='';
   clearTimeout(tid);
   tid=setTimeout(refresh,600);   // espera parar de digitar: digitar o PIN não gera tentativas erradas
 });
 document.getElementById('exit').addEventListener('click',function(){
-  pin.value='';store('pclock_pin',null);store('pclock_dev',null);cur=null;refresh();pin.focus();
+  pin.value='';store('pclock_pin',null);store('pclock_pinbio',null);store('pclock_bio',null);store('pclock_dev',null);cur=null;bioUi();refresh();pin.focus();
 });
 
 function fmt(ts){return new Date(ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}
@@ -306,13 +353,13 @@ function setState(cls,word,sub){
 function noPc(cls,word,sub){
   last=null;setState(cls,word,sub);
   elConn.textContent='';elDot.className='dot';
-  elDeck.classList.add('disabled');renderTabs();
+  elDeck.classList.add('disabled');renderTabs();bioUi();
 }
 
 function paint(){
   var d=curDev();
   if(!d) return;
-  renderTabs();
+  renderTabs();bioUi();
   var locked=d.locked;
   hero.className='hero '+(locked?'locked':'unlocked');
   elWord.textContent=locked?'TRANCADO':'LIBERADO';
