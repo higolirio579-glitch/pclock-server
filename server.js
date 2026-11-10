@@ -18,6 +18,23 @@ try { st = { ...st, ...JSON.parse(fs.readFileSync(FILE, 'utf8')) }; } catch {}
 const save = () => { try { fs.writeFileSync(FILE, JSON.stringify(st)); } catch {} };
 const isLocked = () => Date.now() >= st.unlockUntil;
 
+const FOREVER = 8640000000000000; // "sem limite": data máxima; isLocked sempre false até trancar
+
+// Ícones do app (para instalar no iPhone / Android). Lidos do próprio repositório.
+const path = require('path');
+let ICON180 = null, ICON512 = null;
+try { ICON180 = fs.readFileSync(path.join(__dirname, 'icon-180.png')); } catch {}
+try { ICON512 = fs.readFileSync(path.join(__dirname, 'icon-512.png')); } catch {}
+const MANIFEST = JSON.stringify({
+  name: 'PCLock', short_name: 'PCLock', start_url: '/', scope: '/',
+  display: 'standalone', orientation: 'portrait',
+  background_color: '#1b1f2a', theme_color: '#1b1f2a',
+  icons: [
+    { src: '/icon-180.png', sizes: '180x180', type: 'image/png' },
+    { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
+  ]
+});
+
 // Proteção simples contra chute de PIN: 5 erros = bloqueia 30 segundos por IP
 const LOCK_MS = 30 * 1000;
 const fails = {};
@@ -34,6 +51,13 @@ const PAGE = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#1b1f2a">
 <title>PCLock</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PCLock">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" href="/icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -93,7 +117,11 @@ body{
   border:1.5px solid rgba(53,211,154,.5);border-radius:14px;cursor:pointer;
   transition:background .15s}
 .chip:active{background:rgba(53,211,154,.15)}
-.lockbtn{width:100%;margin-top:12px;padding:18px;font-size:17px;font-weight:700;font-family:inherit;
+.free{display:block;width:100%;margin-top:10px;padding:16px;font-size:16px;font-weight:600;font-family:inherit;
+  background:transparent;color:var(--go);
+  border:1.5px solid rgba(53,211,154,.5);border-radius:14px;cursor:pointer}
+.free:active{background:rgba(53,211,154,.15)}
+.lockbtn{width:100%;margin-top:14px;padding:18px;font-size:17px;font-weight:700;font-family:inherit;
   background:var(--brass);color:#2a1e05;border:0;border-radius:14px;cursor:pointer}
 .lockbtn:active{filter:brightness(.94)}
 .toast{min-height:22px;text-align:center;margin:16px 0 0;font-size:14px;color:var(--text)}
@@ -131,6 +159,7 @@ button:focus-visible,#pin:focus-visible{outline:2px solid #fff;outline-offset:2p
       <button class="chip" onclick="act(120)">2 horas</button>
       <button class="chip" onclick="act(240)">4 horas</button>
     </div>
+    <button class="free" onclick="act(-1)">Liberar sem limite</button>
     <button class="lockbtn" onclick="act(0)">Trancar agora</button>
     <p class="toast" id="toast"></p>
   </section>
@@ -181,6 +210,9 @@ function paint(){
   if(locked){
     elSub.textContent='O computador está travado.';
     elLabel.textContent='Liberar o computador por';
+  }else if(last.unlockUntil>4102444800000){   // além do ano 2100 = sem limite
+    elSub.textContent='Liberado sem limite de tempo.';
+    elLabel.textContent='Trocar para tempo limitado';
   }else{
     var rem=(last.unlockUntil-Date.now())/1000;
     if(rem<=0){refresh();return;}
@@ -219,12 +251,13 @@ async function refresh(){
 
 async function act(min){
   if(elDeck.classList.contains('disabled')) return;
+  var payload=min<0?{forever:true}:{minutes:min};
   try{
-    var r=await fetch('/api/set',{method:'POST',headers:{'x-pin':pin.value,'content-type':'application/json'},body:JSON.stringify({minutes:min})});
+    var r=await fetch('/api/set',{method:'POST',headers:{'x-pin':pin.value,'content-type':'application/json'},body:JSON.stringify(payload)});
     if(!r.ok){refresh();return;}
     last=await r.json();
     paint();
-    toast(min>0?('Liberado por '+human(min*60)+'.'):'Trancado.');
+    toast(min<0?'Liberado sem limite de tempo.':(min>0?('Liberado por '+human(min*60)+'.'):'Trancado.'));
   }catch(e){toast('Não deu para enviar. Tente de novo.');}
 }
 
@@ -243,12 +276,28 @@ http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
 
   if (url.pathname === '/') return send(res, 200, PAGE, 'text/html');
+  if (url.pathname === '/manifest.json') return send(res, 200, MANIFEST, 'application/manifest+json');
+  if (url.pathname === '/icon-180.png' && ICON180) {
+    res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=86400' });
+    return res.end(ICON180);
+  }
+  if (url.pathname === '/icon-512.png' && ICON512) {
+    res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=86400' });
+    return res.end(ICON512);
+  }
 
   // O PC consulta aqui
   if (url.pathname === '/api/agent') {
     if (url.searchParams.get('key') !== AGENT_KEY) return send(res, 403, { error: 'chave' });
     st.lastSeen = Date.now(); save();
     return send(res, 200, { locked: isLocked() });
+  }
+
+  // O PC manda trancar ao ligar (boot). Garante que todo computador que liga começa travado.
+  if (url.pathname === '/api/agent/lock') {
+    if (url.searchParams.get('key') !== AGENT_KEY) return send(res, 403, { error: 'chave' });
+    st.unlockUntil = 0; st.lastSeen = Date.now(); save();
+    return send(res, 200, { ok: true, locked: true });
   }
 
   // Celular: precisa do PIN
@@ -268,10 +317,14 @@ http.createServer((req, res) => {
     let body = '';
     req.on('data', c => { body += c; if (body.length > 1000) req.destroy(); });
     req.on('end', () => {
-      let m = 0;
-      try { m = Number(JSON.parse(body).minutes) || 0; } catch {}
-      m = Math.min(Math.max(m, 0), 24 * 60);
-      st.unlockUntil = m > 0 ? Date.now() + m * 60 * 1000 : 0;
+      let m = 0, forever = false;
+      try { const b = JSON.parse(body); m = Number(b.minutes) || 0; forever = b.forever === true || m === -1; } catch {}
+      if (forever) {
+        st.unlockUntil = FOREVER;
+      } else {
+        m = Math.min(Math.max(m, 0), 24 * 60);
+        st.unlockUntil = m > 0 ? Date.now() + m * 60 * 1000 : 0;
+      }
       save();
       send(res, 200, { locked: isLocked(), unlockUntil: st.unlockUntil, lastSeen: st.lastSeen });
     });
