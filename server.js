@@ -61,11 +61,15 @@ function safeEq(a, b) {
 }
 const cleanName = n => String(n || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 30) || 'PC';
 
+// O PC principal antigo some da lista quando um PC cadastrado pelo instalador usa o mesmo PIN dele
+// (o instalador novo "sobrescreve" o antigo).
+const mainHidden = () => { for (const d of devices.values()) if (!d.legacy && d.sameAsMain) return true; return false; };
+
 // Quais PCs usam o PIN digitado?
 async function matchPin(given) {
   const out = [];
   if (!given) return out;
-  if (main && safeEq(given, PIN)) out.push(main);
+  if (main && !mainHidden() && safeEq(given, PIN)) out.push(main);
   if (/^\d{6,12}$/.test(given)) {
     for (const d of devices.values()) {
       if (d.legacy || !d.salt) continue;
@@ -500,6 +504,19 @@ async function handle(req, res) {
     }
     d.name = cleanName(b.name); d.salt = salt; d.hash = hash;
     d.lastSeen = Date.now();
+    // Mesmo computador reinstalado: o registro mais recente apaga o anterior
+    const machine = /^[0-9a-f]{16,64}$/.test(String(b.machine || '')) ? String(b.machine) : '';
+    d.machine = machine;
+    if (machine) for (const [k, o] of [...devices]) if (!o.legacy && k !== id && o.machine === machine) devices.delete(k);
+    // Usa o mesmo PIN do PC principal antigo? (calcula so quando o hash muda)
+    if (d.chk !== hash) {
+      d.chk = hash;
+      d.sameAsMain = false;
+      if (main && /^\d{6,12}$/.test(PIN)) {
+        const h = await pbkdf2(PIN, Buffer.from(salt, 'hex'), ITER, 32, 'sha1');
+        d.sameAsMain = h.toString('hex') === hash;
+      }
+    }
     if (b.boot === true) { d.unlockUntil = 0; d.shutdownReq = false; }   // ao ligar, cancela pedido de desligar pendente
     if (b.welcome === true) d.unlockUntil = Date.now() + WELCOME_MS;
     const off = !!d.shutdownReq; d.shutdownReq = false;   // entrega o pedido de desligar uma vez só
