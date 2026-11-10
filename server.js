@@ -54,11 +54,14 @@ small{color:#999}
 <script>
 const pin=document.getElementById('pin');
 pin.value=localStorage.getItem('pin')||'';
-pin.oninput=()=>localStorage.setItem('pin',pin.value);
+pin.oninput=()=>{localStorage.setItem('pin',pin.value);refresh()};
 async function refresh(){
+  const st=document.getElementById('st');
+  if(!pin.value){st.textContent='Informe o PIN';st.className='st';return}
   try{
     const r=await fetch('/api/status',{headers:{'x-pin':pin.value}});
-    if(!r.ok){document.getElementById('st').textContent='Informe o PIN';return}
+    if(r.status===429){st.textContent='Muitas tentativas, aguarde 15 min';return}
+    if(!r.ok){st.textContent='PIN incorreto';return}
     const j=await r.json();
     const s=document.getElementById('st');
     s.textContent=j.locked?'🔒 BLOQUEADO':'🔓 LIBERADO até '+new Date(j.unlockUntil).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
@@ -94,7 +97,12 @@ http.createServer((req, res) => {
   // Celular: precisa do PIN
   if (url.pathname === '/api/status' || url.pathname === '/api/set') {
     if (tooMany(ip)) return send(res, 429, { error: 'muitas tentativas' });
-    if (req.headers['x-pin'] !== PIN) { fail(ip); return send(res, 401, { error: 'pin' }); }
+    const given = req.headers['x-pin'] || '';
+    if (given !== PIN) {
+      if (given) fail(ip);   // pedido sem PIN (campo vazio) não conta como tentativa errada
+      return send(res, 401, { error: 'pin' });
+    }
+    delete fails[ip];        // acertou o PIN: zera as tentativas erradas
     if (url.pathname === '/api/status') {
       return send(res, 200, { locked: isLocked(), unlockUntil: st.unlockUntil, lastSeen: st.lastSeen });
     }
