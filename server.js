@@ -273,7 +273,7 @@ http.createServer((req, res) => {
       m = Math.min(Math.max(m, 0), 24 * 60);
       st.unlockUntil = m > 0 ? Date.now() + m * 60 * 1000 : 0;
       save();
-      send(res, 200, { locked: isLocked(), unlockUntil: st.unlockUntil });
+      send(res, 200, { locked: isLocked(), unlockUntil: st.unlockUntil, lastSeen: st.lastSeen });
     });
     return;
   }
