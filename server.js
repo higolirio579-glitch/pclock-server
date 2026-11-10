@@ -18,14 +18,15 @@ try { st = { ...st, ...JSON.parse(fs.readFileSync(FILE, 'utf8')) }; } catch {}
 const save = () => { try { fs.writeFileSync(FILE, JSON.stringify(st)); } catch {} };
 const isLocked = () => Date.now() >= st.unlockUntil;
 
-// Proteção simples contra chute de PIN: 5 erros = bloqueia 15 min por IP
+// Proteção simples contra chute de PIN: 5 erros = bloqueia 30 segundos por IP
+const LOCK_MS = 30 * 1000;
 const fails = {};
 function tooMany(ip) {
   const f = fails[ip];
-  return f && f.n >= 5 && Date.now() - f.t < 15 * 60 * 1000;
+  return f && f.n >= 5 && Date.now() - f.t < LOCK_MS;
 }
 function fail(ip) {
-  const f = fails[ip] && Date.now() - fails[ip].t < 15 * 60 * 1000 ? fails[ip] : { n: 0 };
+  const f = fails[ip] && Date.now() - fails[ip].t < LOCK_MS ? fails[ip] : { n: 0 };
   fails[ip] = { n: f.n + 1, t: Date.now() };
 }
 
@@ -60,7 +61,7 @@ async function refresh(){
   if(!pin.value){st.textContent='Informe o PIN';st.className='st';return}
   try{
     const r=await fetch('/api/status',{headers:{'x-pin':pin.value}});
-    if(r.status===429){st.textContent='Muitas tentativas, aguarde 15 min';return}
+    if(r.status===429){st.textContent='Muitas tentativas, aguarde 30 segundos';return}
     if(!r.ok){st.textContent='PIN incorreto';return}
     const j=await r.json();
     const s=document.getElementById('st');
